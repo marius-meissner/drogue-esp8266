@@ -4,12 +4,13 @@ use crate::protocol::{Command, ConnectionType, FirmwareInfo, IpAddresses, Respon
 
 use heapless::{consts::{U16, U2}, spsc::{Consumer, Queue}, String};
 
-use log::info;
+use log::{error, info};
 
 use crate::adapter::AdapterError::UnableToInitialize;
-use crate::ingress::Ingress;
+use crate::ingress::{DIGEST_COUNTER, Ingress, TIMEOUT_TRIGGERED};
 use crate::network::Esp8266IpNetworkDriver;
 use core::fmt::Debug;
+use core::sync::atomic::Ordering;
 use nom::lib::std::fmt::Formatter;
 use crate::protocol::Response::IpAddress;
 use drogue_network::dns::DnsError;
@@ -127,6 +128,7 @@ fn build_adapter_and_ingress<'a, Tx, Rx>(
             response_consumer,
             notification_consumer,
             sockets: initialize_sockets(),
+            timeout: 1000
         },
         Ingress::new(rx, response_producer, notification_producer),
     )
@@ -238,6 +240,9 @@ pub struct Adapter<'a, Tx>
     response_consumer: Consumer<'a, Response, U2>,
     notification_consumer: Consumer<'a, Response, U16>,
     sockets: [Socket; 5],
+
+    /// Number of digest() calls without non-empty response until timeout is triggered
+    timeout: u32
 }
 
 impl<'a, Tx> Debug for Adapter<'a, Tx>
@@ -270,10 +275,25 @@ impl<'a, Tx> Adapter<'a, Tx>
     }
 
     fn wait_for_response(&mut self) -> Result<Response, AdapterError> {
+        let mut start = DIGEST_COUNTER.load(Ordering::Relaxed);
+
         loop {
             // busy loop until a response is received.
             if let Some(response) = self.response_consumer.dequeue() {
                 return Ok(response);
+            }
+
+            let now = DIGEST_COUNTER.load(Ordering::Relaxed);
+
+            // Counter flipped
+            if now < start {
+                start = now;
+            }
+
+            if (now - start) > self.timeout {
+                error!("Adapter timeout triggered");
+                TIMEOUT_TRIGGERED.store(true, Ordering::Relaxed);
+                return Err(AdapterError::Timeout);
             }
         }
     }
@@ -310,6 +330,13 @@ impl<'a, Tx> Adapter<'a, Tx>
             Ok(Response::Ok) => Ok(()),
             _ => Err(()),
         }
+    }
+
+    /// Sets the timeout threshold.
+    ///
+    /// Threshold is the number of digest() calls without any response data
+    pub fn set_timeout_threshold(&mut self, threshold: u32) {
+        self.timeout = threshold
     }
 
     /// Join a wifi access-point.

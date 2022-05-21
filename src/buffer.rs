@@ -2,6 +2,8 @@ use crate::parser;
 use crate::protocol::Response;
 use moveslice::Moveslice;
 use core::str::from_utf8;
+use core::sync::atomic::Ordering;
+use crate::ingress::TIMEOUT_TRIGGERED;
 
 pub(crate) struct Buffer {
     buffer: [u8; 4096],
@@ -30,6 +32,11 @@ impl Buffer {
     }
 
     pub fn parse(&mut self) -> Result<Response, ()> {
+        if TIMEOUT_TRIGGERED.load(Ordering::Relaxed) {
+            self.pos = 0;
+            TIMEOUT_TRIGGERED.store(false, Ordering::Relaxed);
+        }
+
         if self.pos == 0 {
             return Ok(Response::None);
         }
