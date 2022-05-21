@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::{buffer::Buffer, protocol::Response};
 use heapless::{
     consts::{U16, U2},
@@ -6,6 +7,12 @@ use heapless::{
 
 use embedded_hal::serial::Read;
 use nb::Error;
+
+/// Gets incremented on call to digest()
+pub(crate) static DIGEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// True if timeout was triggered
+pub(crate) static TIMEOUT_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
 pub struct Ingress<'a, Rx>
     where
@@ -64,6 +71,7 @@ impl<'a, Rx> Ingress<'a, Rx>
     /// Digest and process the existing ingressed buffer to
     /// emit appropriate responses and notifications back
     pub fn digest(&mut self) {
+        self.increment_counter();
         let result = self.buffer.parse();
 
 
@@ -108,5 +116,17 @@ impl<'a, Rx> Ingress<'a, Rx>
                 }
             }
         }
+    }
+
+    /// Increments the DIGEST_COUNTER
+    fn increment_counter(&self) {
+        let current = DIGEST_COUNTER.load(Ordering::Relaxed);
+
+        if current == u32::MAX {
+            DIGEST_COUNTER.store(0, Ordering::Relaxed);
+            return;
+        }
+
+        DIGEST_COUNTER.store(current + 1, Ordering::Relaxed);
     }
 }
