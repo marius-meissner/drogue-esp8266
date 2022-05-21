@@ -350,6 +350,10 @@ impl<'a, Tx> Adapter<'a, Tx>
         ssid: &'c str,
         password: &'c str,
     ) -> Result<(), WifiConnectionFailure> {
+        for socket in &mut self.sockets {
+            socket.state = SocketState::Closed;
+        }
+
         let command = Command::JoinAp { ssid, password };
 
         match self.send(command) {
